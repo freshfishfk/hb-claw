@@ -87,6 +87,11 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
   "token",
@@ -415,11 +420,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
     );
   }
+  const allowUnauthenticatedNetworkBind = isTruthyEnvFlag(process.env.OPENCLAW_GATEWAY_OPEN_ACCESS);
   if (
     bind !== "loopback" &&
     !hasSharedSecret &&
     !canBootstrapToken &&
-    resolvedAuthMode !== "trusted-proxy"
+    resolvedAuthMode !== "trusted-proxy" &&
+    !allowUnauthenticatedNetworkBind
   ) {
     defaultRuntime.error(
       [

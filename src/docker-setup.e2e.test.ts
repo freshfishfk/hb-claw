@@ -146,6 +146,7 @@ async function runDockerSetupWithUnsetGatewayToken(
 
   const result = runDockerSetup(sandbox, {
     OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_GATEWAY_OPEN_ACCESS: "0",
     OPENCLAW_CONFIG_DIR: configDir,
     OPENCLAW_WORKSPACE_DIR: workspaceDir,
   });
@@ -217,6 +218,8 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home"); // pragma: allowlist secret
+    expect(envFile).toContain("OPENCLAW_GATEWAY_OPEN_ACCESS=1");
+    expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=");
     const extraCompose = await readFile(
       join(activeSandbox.rootDir, "docker-compose.extra.yml"),
       "utf8",
@@ -227,7 +230,7 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(log).toContain(
-      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --non-interactive --accept-risk --auth-choice skip --skip-health --skip-channels --skip-skills --skip-search --skip-ui --no-install-daemon",
     );
     expect(log).toContain(
       "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.mode local",
@@ -236,9 +239,69 @@ describe("scripts/docker/setup.sh", () => {
       "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.bind lan",
     );
     expect(log).toContain(
-      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] --strict-json',
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.auth.mode none",
+    );
+    expect(log).toContain(
+      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["*"] --strict-json',
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.dangerouslyDisableDeviceAuth true",
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
+  });
+
+  it("uses configurable docker build proxy args", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_DOCKER_HTTP_PROXY: "http://proxy.local:7890",
+      OPENCLAW_DOCKER_HTTPS_PROXY: "http://proxy.local:7891",
+      OPENCLAW_DOCKER_NO_PROXY: "localhost,127.0.0.1,.internal",
+    });
+    expect(result.status).toBe(0);
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_DOCKER_HTTP_PROXY=http://proxy.local:7890");
+    expect(envFile).toContain("OPENCLAW_DOCKER_HTTPS_PROXY=http://proxy.local:7891");
+    expect(envFile).toContain("OPENCLAW_DOCKER_NO_PROXY=localhost,127.0.0.1,.internal");
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("--build-arg http_proxy=http://proxy.local:7890");
+    expect(log).toContain("--build-arg HTTP_PROXY=http://proxy.local:7890");
+    expect(log).toContain("--build-arg https_proxy=http://proxy.local:7891");
+    expect(log).toContain("--build-arg HTTPS_PROXY=http://proxy.local:7891");
+    expect(log).toContain("--build-arg no_proxy=localhost,127.0.0.1,.internal");
+    expect(log).toContain("--build-arg NO_PROXY=localhost,127.0.0.1,.internal");
+  });
+
+  it("supports open-access mode for LAN ip:port access without token", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_GATEWAY_OPEN_ACCESS: "1",
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+    });
+    expect(result.status).toBe(0);
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_GATEWAY_OPEN_ACCESS=1");
+    expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=");
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.auth.mode none",
+    );
+    expect(log).toContain(
+      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["*"] --strict-json',
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.dangerouslyDisableDeviceAuth true",
+    );
+    expect(log).not.toContain(
+      'config set gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] --strict-json',
+    );
   });
 
   it("avoids shared-network openclaw-cli before the gateway is started", async () => {
@@ -546,6 +609,13 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/OPENCLAW_GATEWAY_TOKEN: \$\{OPENCLAW_GATEWAY_TOKEN:-\}/g)).toHaveLength(
       2,
     );
+  });
+
+  it("keeps docker-compose open access env defaults aligned across services", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(
+      compose.match(/OPENCLAW_GATEWAY_OPEN_ACCESS: \$\{OPENCLAW_GATEWAY_OPEN_ACCESS:-\}/g),
+    ).toHaveLength(2);
   });
 
   it("keeps docker-compose timezone env defaults aligned across services", async () => {

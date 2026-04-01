@@ -32,6 +32,11 @@ export type GatewayRuntimeConfig = {
   canvasHostEnabled: boolean;
 };
 
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: ReturnType<typeof loadConfig>;
   port: number;
@@ -105,6 +110,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
+  const allowUnauthenticatedNetworkBind = isTruthyEnvFlag(process.env.OPENCLAW_GATEWAY_OPEN_ACCESS);
   const hooksConfig = resolveHooksConfig(params.cfg);
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
@@ -125,7 +131,12 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
-  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+  if (
+    !isLoopbackHost(bindHost) &&
+    !hasSharedSecret &&
+    authMode !== "trusted-proxy" &&
+    !allowUnauthenticatedNetworkBind
+  ) {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );

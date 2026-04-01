@@ -114,10 +114,13 @@ describe("resolveGatewayRuntimeConfig", () => {
 
   describe("token/password auth modes", () => {
     let originalToken: string | undefined;
+    let originalOpenAccess: string | undefined;
 
     beforeEach(() => {
       originalToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      originalOpenAccess = process.env.OPENCLAW_GATEWAY_OPEN_ACCESS;
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_OPEN_ACCESS;
     });
 
     afterEach(() => {
@@ -125,6 +128,11 @@ describe("resolveGatewayRuntimeConfig", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = originalToken;
       } else {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      }
+      if (originalOpenAccess !== undefined) {
+        process.env.OPENCLAW_GATEWAY_OPEN_ACCESS = originalOpenAccess;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_OPEN_ACCESS;
       }
     });
 
@@ -203,6 +211,22 @@ describe("resolveGatewayRuntimeConfig", () => {
       await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
         expectedMessage,
       );
+    });
+
+    it("allows lan binding with auth none when open access env is enabled", async () => {
+      process.env.OPENCLAW_GATEWAY_OPEN_ACCESS = "1";
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: { mode: "none" as const },
+            controlUi: { allowedOrigins: ["*"] },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.authMode).toBe("none");
+      expect(result.bindHost).toBe("0.0.0.0");
     });
 
     it.each([

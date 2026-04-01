@@ -9,6 +9,8 @@ EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
+RAW_OPEN_ACCESS_SETTING="${OPENCLAW_GATEWAY_OPEN_ACCESS:-1}"
+OPEN_ACCESS_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
 
@@ -25,9 +27,20 @@ require_cmd() {
 }
 
 run_docker_build() {
-  # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
-  # BuildKit so hosts defaulting to the legacy builder do not fail.
-  DOCKER_BUILDKIT=1 docker build "$@"
+  local http_proxy_value="${OPENCLAW_DOCKER_HTTP_PROXY:-${HTTP_PROXY:-${http_proxy:-}}}"
+  local https_proxy_value="${OPENCLAW_DOCKER_HTTPS_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}"
+  local no_proxy_value="${OPENCLAW_DOCKER_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"
+  local -a build_args=()
+  if [[ -n "$http_proxy_value" ]]; then
+    build_args+=(--build-arg "http_proxy=$http_proxy_value" --build-arg "HTTP_PROXY=$http_proxy_value")
+  fi
+  if [[ -n "$https_proxy_value" ]]; then
+    build_args+=(--build-arg "https_proxy=$https_proxy_value" --build-arg "HTTPS_PROXY=$https_proxy_value")
+  fi
+  if [[ -n "$no_proxy_value" ]]; then
+    build_args+=(--build-arg "no_proxy=$no_proxy_value" --build-arg "NO_PROXY=$no_proxy_value")
+  fi
+  DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "$@"
 }
 
 is_truthy_value() {
@@ -126,6 +139,12 @@ ensure_control_ui_allowed_origins() {
   run_prestart_cli config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json \
     >/dev/null
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+}
+
+configure_open_access_gateway() {
+  run_prestart_cli config set gateway.auth.mode none >/dev/null
+  run_prestart_cli config set gateway.controlUi.allowedOrigins '["*"]' --strict-json >/dev/null
+  run_prestart_cli config set gateway.controlUi.dangerouslyDisableDeviceAuth true >/dev/null
 }
 
 sync_gateway_mode_and_bind() {
@@ -228,6 +247,9 @@ fi
 if is_truthy_value "$RAW_SANDBOX_SETTING"; then
   SANDBOX_ENABLED="1"
 fi
+if is_truthy_value "$RAW_OPEN_ACCESS_SETTING"; then
+  OPEN_ACCESS_ENABLED="1"
+fi
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
@@ -275,10 +297,14 @@ export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_DOCKER_HTTP_PROXY="${OPENCLAW_DOCKER_HTTP_PROXY:-${HTTP_PROXY:-${http_proxy:-}}}"
+export OPENCLAW_DOCKER_HTTPS_PROXY="${OPENCLAW_DOCKER_HTTPS_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}"
+export OPENCLAW_DOCKER_NO_PROXY="${OPENCLAW_DOCKER_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
+export OPENCLAW_GATEWAY_OPEN_ACCESS="$OPEN_ACCESS_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
 
@@ -289,24 +315,28 @@ if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
 fi
 export DOCKER_GID
 
-if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
-  if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
-    OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
-    echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
-  else
-    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
-    if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
-      OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
-      echo "Reusing gateway token from $ROOT_DIR/.env"
-    elif command -v openssl >/dev/null 2>&1; then
-      OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+if [[ -n "$OPEN_ACCESS_ENABLED" ]]; then
+  OPENCLAW_GATEWAY_TOKEN=""
+else
+  if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
+    EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
+    if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
+      OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
+      echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
     else
-      OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
+      DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
+      if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
+        OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
+        echo "Reusing gateway token from $ROOT_DIR/.env"
+      elif command -v openssl >/dev/null 2>&1; then
+        OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+      else
+        OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
 )"
+      fi
     fi
   fi
 fi
@@ -461,11 +491,15 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_DOCKER_HTTP_PROXY \
+  OPENCLAW_DOCKER_HTTPS_PROXY \
+  OPENCLAW_DOCKER_NO_PROXY \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
+  OPENCLAW_GATEWAY_OPEN_ACCESS \
   OPENCLAW_TZ
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
@@ -502,23 +536,42 @@ run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
-echo "==> Onboarding (interactive)"
+echo "==> Onboarding (non-interactive)"
 echo "Docker setup pins Gateway mode to local."
 echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
 echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
-echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+if [[ -n "$OPEN_ACCESS_ENABLED" ]]; then
+  echo "Gateway token auth: disabled (OPENCLAW_GATEWAY_OPEN_ACCESS=1)"
+else
+  echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+fi
 echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
 echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
-run_prestart_cli onboard --mode local --no-install-daemon
+run_prestart_cli onboard \
+  --mode local \
+  --non-interactive \
+  --accept-risk \
+  --auth-choice skip \
+  --skip-health \
+  --skip-channels \
+  --skip-skills \
+  --skip-search \
+  --skip-ui \
+  --no-install-daemon
 
 echo ""
 echo "==> Docker gateway defaults"
 sync_gateway_mode_and_bind
 
 echo ""
-echo "==> Control UI origin allowlist"
-ensure_control_ui_allowed_origins
+if [[ -n "$OPEN_ACCESS_ENABLED" ]]; then
+  echo "==> Open access mode"
+  configure_open_access_gateway
+else
+  echo "==> Control UI origin allowlist"
+  ensure_control_ui_allowed_origins
+fi
 
 echo ""
 echo "==> Provider setup (optional)"
@@ -648,8 +701,16 @@ echo "Gateway running with host port mapping."
 echo "Access from tailnet devices via the host's tailnet IP."
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
-echo "Token: $OPENCLAW_GATEWAY_TOKEN"
+if [[ -n "$OPEN_ACCESS_ENABLED" ]]; then
+  echo "Token auth: disabled"
+else
+  echo "Token: $OPENCLAW_GATEWAY_TOKEN"
+fi
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"$OPENCLAW_GATEWAY_TOKEN\""
+if [[ -n "$OPEN_ACCESS_ENABLED" ]]; then
+  echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health"
+else
+  echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"$OPENCLAW_GATEWAY_TOKEN\""
+fi
