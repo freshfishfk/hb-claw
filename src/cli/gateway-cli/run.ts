@@ -9,6 +9,7 @@ import {
   readConfigFileSnapshot,
   resolveStateDir,
   resolveGatewayPort,
+  writeConfigFile,
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -26,6 +27,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
+import { isActivated, resolveActivationMarkerPath, waitForActivation } from "./activation.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -86,6 +88,8 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
 ] as const;
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
+const DEFAULT_ACTIVATION_SERVICE_URL = "http://127.0.0.1:18080/mock/activation";
+const DEFAULT_ACTIVATION_PROVIDER = "openai";
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
@@ -225,7 +229,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
 
-  const cfg = loadConfig();
+  let cfg = loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");
@@ -249,6 +253,28 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
     defaultRuntime.exit(1);
     return;
+  }
+  const activationMarkerPath = resolveActivationMarkerPath(resolveStateDir(process.env));
+  const activated = await isActivated(activationMarkerPath);
+  if (!activated) {
+    cfg = await waitForActivation({
+      markerPath: activationMarkerPath,
+      cfg,
+      bind,
+      customBindHost: toOptionString(cfg.gateway?.customBindHost),
+      port,
+      activationServiceUrl:
+        process.env.OPENCLAW_ACTIVATION_SERVICE_URL?.trim() || DEFAULT_ACTIVATION_SERVICE_URL,
+      providerId:
+        process.env.OPENCLAW_ACTIVATION_PROVIDER_ID?.trim() || DEFAULT_ACTIVATION_PROVIDER,
+      providerBaseUrl: process.env.OPENCLAW_ACTIVATION_MODEL_BASE_URL?.trim() || undefined,
+      persistConfig: async (next) => await writeConfigFile(next),
+      log: {
+        info: (msg) => gatewayLog.info(msg),
+        warn: (msg) => gatewayLog.warn(msg),
+      },
+    });
+    gatewayLog.info("gateway activation completed; continuing startup");
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     const stale = cleanStaleGatewayProcessesSync(port);

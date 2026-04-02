@@ -16,6 +16,7 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { handleSlackHttpRequest } from "../plugin-sdk/slack.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { handleActivationStatusHttpRequest } from "./activation-http.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -831,6 +832,10 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(requestPath)
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
+        {
+          name: "activation-status",
+          run: () => handleActivationStatusHttpRequest(req, res),
+        },
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
