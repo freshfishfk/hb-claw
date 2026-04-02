@@ -89,15 +89,13 @@ function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
     );
   }
 
-  const missingIds = CHAT_CHANNEL_ORDER.filter((id) => !entries.has(id));
-  if (missingIds.length > 0) {
-    throw new Error(`Missing bundled chat channel metadata for: ${missingIds.join(", ")}`);
-  }
-
   return Object.freeze(Object.fromEntries(entries)) as Record<ChatChannelId, ChatChannelMeta>;
 }
 
 const CHAT_CHANNEL_META = buildChatChannelMetaById();
+const AVAILABLE_CHAT_CHANNEL_ORDER = Object.freeze(
+  CHAT_CHANNEL_ORDER.filter((id) => Boolean(CHAT_CHANNEL_META[id])),
+);
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   Object.fromEntries(
@@ -116,7 +114,7 @@ function normalizeChannelKey(raw?: string | null): string | undefined {
 }
 
 export function listChatChannels(): ChatChannelMeta[] {
-  return CHAT_CHANNEL_ORDER.map((id) => CHAT_CHANNEL_META[id]);
+  return AVAILABLE_CHAT_CHANNEL_ORDER.map((id) => CHAT_CHANNEL_META[id]);
 }
 
 export function listChatChannelAliases(): string[] {
@@ -124,7 +122,11 @@ export function listChatChannelAliases(): string[] {
 }
 
 export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {
-  return CHAT_CHANNEL_META[id];
+  const meta = CHAT_CHANNEL_META[id];
+  if (!meta) {
+    throw new Error(`Missing bundled chat channel metadata for: ${id}`);
+  }
+  return meta;
 }
 
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
@@ -133,5 +135,5 @@ export function normalizeChatChannelId(raw?: string | null): ChatChannelId | nul
     return null;
   }
   const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
-  return CHAT_CHANNEL_ORDER.includes(resolved) ? resolved : null;
+  return AVAILABLE_CHAT_CHANNEL_ORDER.includes(resolved) ? resolved : null;
 }

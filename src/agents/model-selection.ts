@@ -1,3 +1,5 @@
+import { normalizeGoogleModelId } from "../../extensions/google/model-id.js";
+import { normalizeXaiModelId } from "../../extensions/xai/model-id.js";
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -6,8 +8,6 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,

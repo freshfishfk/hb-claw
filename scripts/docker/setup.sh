@@ -11,8 +11,12 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 RAW_OPEN_ACCESS_SETTING="${OPENCLAW_GATEWAY_OPEN_ACCESS:-1}"
 OPEN_ACCESS_ENABLED=""
+RAW_CN_PROFILE_SETTING="${OPENCLAW_CN_PROFILE:-}"
+CN_PROFILE_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+OPENCLAW_CN_BUNDLED_PLUGIN_ALLOWLIST_DEFAULT="deepseek,qianfan,moonshot,minimax,zai,volcengine,kimi-coding,qqbot,feishu,device-pair,memory-core,memory-lancedb,diffs,thread-ownership,talk-voice,browser"
+OPENCLAW_CN_PLUGIN_ALLOW_JSON='["deepseek","qianfan","moonshot","minimax","zai","volcengine","kimi","qqbot","feishu","device-pair","memory-core","memory-lancedb","diffs","thread-ownership","talk-voice","browser"]'
 
 fail() {
   echo "ERROR: $*" >&2
@@ -50,6 +54,31 @@ is_truthy_value() {
     1 | true | yes | on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+normalize_plugin_list() {
+  local raw="${1:-}"
+  local token=""
+  local normalized=""
+  local seen=" "
+  raw="${raw//,/ }"
+  for token in $raw; do
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    if [[ -z "$token" ]]; then
+      continue
+    fi
+    if [[ "$seen" == *" $token "* ]]; then
+      continue
+    fi
+    seen="$seen$token "
+    if [[ -z "$normalized" ]]; then
+      normalized="$token"
+    else
+      normalized="$normalized,$token"
+    fi
+  done
+  printf '%s' "$normalized"
 }
 
 read_config_gateway_token() {
@@ -145,6 +174,12 @@ configure_open_access_gateway() {
   run_prestart_cli config set gateway.auth.mode none >/dev/null
   run_prestart_cli config set gateway.controlUi.allowedOrigins '["*"]' --strict-json >/dev/null
   run_prestart_cli config set gateway.controlUi.dangerouslyDisableDeviceAuth true >/dev/null
+}
+
+configure_cn_product_profile() {
+  run_prestart_cli config set plugins.allow "$OPENCLAW_CN_PLUGIN_ALLOW_JSON" --strict-json >/dev/null
+  run_prestart_cli config set channels.qqbot.enabled true >/dev/null
+  run_prestart_cli config set channels.feishu.enabled true >/dev/null
 }
 
 sync_gateway_mode_and_bind() {
@@ -250,6 +285,9 @@ fi
 if is_truthy_value "$RAW_OPEN_ACCESS_SETTING"; then
   OPEN_ACCESS_ENABLED="1"
 fi
+if is_truthy_value "$RAW_CN_PROFILE_SETTING"; then
+  CN_PROFILE_ENABLED="1"
+fi
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
@@ -297,6 +335,21 @@ export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST="${OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST:-}"
+if [[ -n "$CN_PROFILE_ENABLED" && -z "$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST" ]]; then
+  OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST="$OPENCLAW_CN_BUNDLED_PLUGIN_ALLOWLIST_DEFAULT"
+fi
+OPENCLAW_EXTENSIONS="$(normalize_plugin_list "$OPENCLAW_EXTENSIONS")"
+OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST="$(normalize_plugin_list "$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST")"
+if [[ -n "$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST" ]]; then
+  if [[ "$OPENCLAW_EXTENSIONS" != "$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST" ]]; then
+    echo "Syncing OPENCLAW_EXTENSIONS to OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST to avoid plugin drift."
+  fi
+  OPENCLAW_EXTENSIONS="$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST"
+elif [[ -n "$OPENCLAW_EXTENSIONS" ]]; then
+  echo "Syncing OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST to OPENCLAW_EXTENSIONS to avoid plugin drift."
+  OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST="$OPENCLAW_EXTENSIONS"
+fi
 export OPENCLAW_DOCKER_HTTP_PROXY="${OPENCLAW_DOCKER_HTTP_PROXY:-${HTTP_PROXY:-${http_proxy:-}}}"
 export OPENCLAW_DOCKER_HTTPS_PROXY="${OPENCLAW_DOCKER_HTTPS_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}"
 export OPENCLAW_DOCKER_NO_PROXY="${OPENCLAW_DOCKER_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"
@@ -305,6 +358,7 @@ export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_GATEWAY_OPEN_ACCESS="$OPEN_ACCESS_ENABLED"
+export OPENCLAW_CN_PROFILE="$CN_PROFILE_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
 
@@ -491,6 +545,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST \
   OPENCLAW_DOCKER_HTTP_PROXY \
   OPENCLAW_DOCKER_HTTPS_PROXY \
   OPENCLAW_DOCKER_NO_PROXY \
@@ -500,6 +555,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
   OPENCLAW_GATEWAY_OPEN_ACCESS \
+  OPENCLAW_CN_PROFILE \
   OPENCLAW_TZ
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
@@ -507,6 +563,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   run_docker_build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST=${OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
@@ -563,6 +620,12 @@ run_prestart_cli onboard \
 echo ""
 echo "==> Docker gateway defaults"
 sync_gateway_mode_and_bind
+
+echo ""
+if [[ -n "$CN_PROFILE_ENABLED" ]]; then
+  echo "==> China Mainland profile"
+  configure_cn_product_profile
+fi
 
 echo ""
 if [[ -n "$OPEN_ACCESS_ENABLED" ]]; then

@@ -304,6 +304,40 @@ describe("scripts/docker/setup.sh", () => {
     );
   });
 
+  it("supports china mainland profile for bundled components", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CN_PROFILE: "1",
+      OPENCLAW_GATEWAY_OPEN_ACCESS: "1",
+    });
+    expect(result.status).toBe(0);
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_CN_PROFILE=1");
+    expect(envFile).toContain(
+      "OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST=deepseek,qianfan,moonshot,minimax,zai,volcengine,kimi-coding,qqbot,feishu,device-pair,memory-core,memory-lancedb,diffs,thread-ownership,talk-voice,browser",
+    );
+    expect(envFile).toContain(
+      "OPENCLAW_EXTENSIONS=deepseek,qianfan,moonshot,minimax,zai,volcengine,kimi-coding,qqbot,feishu,device-pair,memory-core,memory-lancedb,diffs,thread-ownership,talk-voice,browser",
+    );
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain(
+      "--build-arg OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST=deepseek,qianfan,moonshot,minimax,zai,volcengine,kimi-coding,qqbot,feishu,device-pair,memory-core,memory-lancedb,diffs,thread-ownership,talk-voice,browser",
+    );
+    expect(log).toContain(
+      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set plugins.allow ["deepseek","qianfan","moonshot","minimax","zai","volcengine","kimi","qqbot","feishu","device-pair","memory-core","memory-lancedb","diffs","thread-ownership","talk-voice","browser"] --strict-json',
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set channels.qqbot.enabled true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set channels.feishu.enabled true",
+    );
+  });
+
   it("avoids shared-network openclaw-cli before the gateway is started", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
@@ -319,6 +353,25 @@ describe("scripts/docker/setup.sh", () => {
     expect(prestartLines.some((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line))).toBe(
       false,
     );
+  });
+
+  it("syncs extension and bundled allowlist values to avoid drift", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTENSIONS: "deepseek,moonshot",
+      OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST: "qianfan,volcengine",
+    });
+    expect(result.status).toBe(0);
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST=qianfan,volcengine");
+    expect(envFile).toContain("OPENCLAW_EXTENSIONS=qianfan,volcengine");
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("--build-arg OPENCLAW_EXTENSIONS=qianfan,volcengine");
+    expect(log).toContain("--build-arg OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST=qianfan,volcengine");
   });
 
   it("forces BuildKit for local and sandbox docker builds", async () => {

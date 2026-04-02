@@ -15,8 +15,9 @@
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
+ARG OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST=""
 ARG OPENCLAW_DOCKER_APT_UPGRADE=1
-ARG OPENCLAW_NPM_REGISTRY="https://registry.npmmirror.com"
+ARG OPENCLAW_NPM_REGISTRY=""
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -43,6 +44,7 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST
 ARG OPENCLAW_NPM_REGISTRY
 ENV NPM_CONFIG_REGISTRY="${OPENCLAW_NPM_REGISTRY}"
 ENV npm_config_registry="${OPENCLAW_NPM_REGISTRY}"
@@ -105,7 +107,15 @@ RUN pnpm ui:build
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
-RUN CI=true pnpm prune --prod && \
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST
+RUN if [ -n "$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST" ]; then \
+      OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST="$OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST" \
+      OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" \
+      node -e "const fs=require('node:fs'); const path=require('node:path'); const pluginDir=process.env.OPENCLAW_BUNDLED_PLUGIN_DIR || 'extensions'; const root=path.resolve('/app', pluginDir); const raw=(process.env.OPENCLAW_BUNDLED_PLUGIN_ALLOWLIST||'').trim(); if (!raw || !fs.existsSync(root)) process.exit(0); const keep=new Set(raw.split(/[,\s]+/).map((v)=>v.trim()).filter(Boolean)); for (const name of fs.readdirSync(root)) { const full=path.join(root,name); let stat; try { stat=fs.lstatSync(full); } catch { continue; } if (!stat.isDirectory()) continue; if (!keep.has(name)) fs.rmSync(full,{recursive:true,force:true}); }"; \
+    fi
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    CI=true pnpm prune --prod --ignore-scripts && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────
