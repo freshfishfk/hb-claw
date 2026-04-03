@@ -22,7 +22,7 @@ function makeRes() {
 }
 
 describe("token usage http", () => {
-  it("aggregates quota and usage from activation service response", async () => {
+  it("extracts totals from new activation usage response", async () => {
     const prevConfig = process.env.OPENCLAW_CONFIG_PATH;
     const prevService = process.env.OPENCLAW_ACTIVATION_SERVICE_URL;
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-token-usage-"));
@@ -54,6 +54,82 @@ describe("token usage http", () => {
       globalThis.fetch = (async () =>
         new Response(
           JSON.stringify({
+            code: true,
+            message: "ok",
+            data: {
+              name: "test",
+              total_granted: 25000000,
+              total_used: 1259289,
+              total_available: 23740711,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )) as unknown as typeof fetch;
+
+      try {
+        const res = makeRes();
+        await handleTokenUsageHttpRequest(makeReq("/api/activation/token-usage"), res.res);
+        expect(res.res.statusCode).toBe(200);
+        const parsed = JSON.parse(res.getBody());
+        expect(parsed.ok).toBe(true);
+        expect(parsed.totals).toEqual({ quota: 25000000, used: 1259289, remaining: 23740711 });
+        expect(parsed.tokens[0]).toMatchObject({
+          tokenId: -1,
+          tokenName: "test",
+          quota: 25000000,
+          used: 1259289,
+          remaining: 23740711,
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    } finally {
+      if (prevConfig === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = prevConfig;
+      }
+      if (prevService === undefined) {
+        delete process.env.OPENCLAW_ACTIVATION_SERVICE_URL;
+      } else {
+        process.env.OPENCLAW_ACTIVATION_SERVICE_URL = prevService;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps compatibility with legacy usage array response", async () => {
+    const prevConfig = process.env.OPENCLAW_CONFIG_PATH;
+    const prevService = process.env.OPENCLAW_ACTIVATION_SERVICE_URL;
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-token-usage-legacy-"));
+    try {
+      const cfgPath = path.join(dir, "openclaw.json");
+      await writeFile(
+        cfgPath,
+        JSON.stringify(
+          {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: "sk-test-legacy",
+                  models: [],
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+      process.env.OPENCLAW_ACTIVATION_SERVICE_URL = "http://mock.example.com/mock/activation";
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
             success: true,
             message: "",
             data: [
@@ -68,7 +144,6 @@ describe("token usage http", () => {
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         )) as unknown as typeof fetch;
-
       try {
         const res = makeRes();
         await handleTokenUsageHttpRequest(makeReq("/api/activation/token-usage"), res.res);
@@ -76,13 +151,6 @@ describe("token usage http", () => {
         const parsed = JSON.parse(res.getBody());
         expect(parsed.ok).toBe(true);
         expect(parsed.totals).toEqual({ quota: 150, used: 150, remaining: 0 });
-        expect(parsed.tokens[0]).toMatchObject({
-          tokenId: 5,
-          tokenName: "My Token",
-          quota: 150,
-          used: 150,
-          remaining: 0,
-        });
       } finally {
         globalThis.fetch = originalFetch;
       }

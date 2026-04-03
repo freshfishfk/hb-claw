@@ -35,6 +35,17 @@ type ActivationUsageResponse =
       message: string;
     };
 
+type ActivationUsageSummaryResponse = {
+  code: boolean;
+  message: string;
+  data?: {
+    name?: string;
+    total_available?: number;
+    total_granted?: number;
+    total_used?: number;
+  };
+};
+
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -45,7 +56,7 @@ function resolveUsageUrlFromActivationBase(rawBase: string): string {
   try {
     const url = new URL(rawBase);
     // Prefer same origin + standard usage path
-    return `${url.origin}/api/usage/token`;
+    return `${url.origin}/api/usage/token/`;
   } catch {
     // Fallback: assume complete URL provided
     return rawBase;
@@ -72,6 +83,34 @@ function resolveActivatedProviderApiKey(): { providerId: string; apiKey: string 
     }
   }
   return null;
+}
+
+function isLegacyUsageArrayResponse(input: unknown): input is ActivationUsageResponse {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const value = input as Record<string, unknown>;
+  if (typeof value.success !== "boolean" || typeof value.message !== "string") {
+    return false;
+  }
+  if (value.success) {
+    return Array.isArray(value.data);
+  }
+  return true;
+}
+
+function isSummaryUsageResponse(input: unknown): input is ActivationUsageSummaryResponse {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const value = input as Record<string, unknown>;
+  if (typeof value.code !== "boolean" || typeof value.message !== "string") {
+    return false;
+  }
+  if (value.data === undefined) {
+    return true;
+  }
+  return typeof value.data === "object" && value.data !== null;
 }
 
 export async function handleTokenUsageHttpRequest(
@@ -112,51 +151,73 @@ export async function handleTokenUsageHttpRequest(
       });
       return true;
     }
-    const parsed = (await response.json()) as ActivationUsageResponse;
-    if (!parsed || !parsed.success || !Array.isArray(parsed.data)) {
+    const parsed = (await response.json()) as unknown;
+    let tokens: Array<{ tokenId: number; tokenName: string; quota: number; used: number }>;
+    let totals: { quota: number; used: number };
+    if (isSummaryUsageResponse(parsed)) {
+      if (!parsed.code || !parsed.data) {
+        sendJson(res, 502, {
+          ok: false,
+          error: parsed.message || "activation usage upstream failed",
+        });
+        return true;
+      }
+      const quota = typeof parsed.data.total_granted === "number" ? parsed.data.total_granted : 0;
+      const used = typeof parsed.data.total_used === "number" ? parsed.data.total_used : 0;
+      const tokenName = typeof parsed.data.name === "string" ? parsed.data.name : "";
+      tokens = [{ tokenId: -1, tokenName, quota, used }];
+      totals = { quota, used };
+    } else if (isLegacyUsageArrayResponse(parsed)) {
+      if (!parsed.success || !Array.isArray(parsed.data)) {
+        sendJson(res, 502, {
+          ok: false,
+          error: parsed.message || "activation usage upstream failed",
+        });
+        return true;
+      }
+      const groups = new Map<
+        number,
+        { tokenId: number; tokenName: string; quota: number; used: number }
+      >();
+      for (const item of parsed.data) {
+        const id = typeof item.token_id === "number" ? item.token_id : -1;
+        const name = typeof item.token_name === "string" ? item.token_name : "";
+        const quota = typeof item.quota === "number" ? item.quota : 0;
+        const used =
+          (typeof item.prompt_tokens === "number" ? item.prompt_tokens : 0) +
+          (typeof item.completion_tokens === "number" ? item.completion_tokens : 0);
+        const prev = groups.get(id);
+        if (!prev) {
+          groups.set(id, { tokenId: id, tokenName: name, quota, used });
+        } else {
+          prev.used += used;
+          if (quota > prev.quota) {
+            prev.quota = quota;
+          }
+        }
+      }
+      tokens = Array.from(groups.values());
+      totals = tokens.reduce(
+        (acc, t) => {
+          acc.quota += t.quota;
+          acc.used += t.used;
+          return acc;
+        },
+        { quota: 0, used: 0 },
+      );
+    } else {
       sendJson(res, 502, { ok: false, error: "activation usage payload invalid" });
       return true;
     }
-    const groups = new Map<
-      number,
-      { tokenId: number; tokenName: string; quota: number; used: number }
-    >();
-    for (const item of parsed.data) {
-      const id = typeof item.token_id === "number" ? item.token_id : -1;
-      const name = typeof item.token_name === "string" ? item.token_name : "";
-      const quota = typeof item.quota === "number" ? item.quota : 0;
-      const used =
-        (typeof item.prompt_tokens === "number" ? item.prompt_tokens : 0) +
-        (typeof item.completion_tokens === "number" ? item.completion_tokens : 0);
-      const prev = groups.get(id);
-      if (!prev) {
-        groups.set(id, { tokenId: id, tokenName: name, quota, used });
-      } else {
-        prev.used += used;
-        // Keep the highest seen quota as the token's current quota
-        if (quota > prev.quota) {
-          prev.quota = quota;
-        }
-      }
-    }
-    const tokens = Array.from(groups.values()).map((g) => ({
-      tokenId: g.tokenId,
-      tokenName: g.tokenName,
-      quota: g.quota,
-      used: g.used,
-      remaining: Math.max(0, g.quota - g.used),
-    }));
-    const totals = tokens.reduce(
-      (acc, t) => {
-        acc.quota += t.quota;
-        acc.used += t.used;
-        return acc;
-      },
-      { quota: 0, used: 0 },
-    );
     const body = {
       ok: true,
-      tokens,
+      tokens: tokens.map((g) => ({
+        tokenId: g.tokenId,
+        tokenName: g.tokenName,
+        quota: g.quota,
+        used: g.used,
+        remaining: Math.max(0, g.quota - g.used),
+      })),
       totals: {
         quota: totals.quota,
         used: totals.used,
