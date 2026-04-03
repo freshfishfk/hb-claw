@@ -80,6 +80,7 @@ import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
+import { handleTokenUsageHttpRequest } from "./token-usage-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -835,6 +836,10 @@ export function createGatewayHttpServer(opts: {
         {
           name: "activation-status",
           run: () => handleActivationStatusHttpRequest(req, res),
+        },
+        {
+          name: "activation-token-usage",
+          run: () => handleTokenUsageHttpRequest(req, res),
         },
         {
           name: "hooks",
