@@ -3,10 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { applyActivationConfig, isActivated, resolveActivationMarkerPath } from "./activation.js";
+import {
+  applyActivationConfig,
+  deriveProviderIdFromBaseUrl,
+  isActivated,
+  resolveActivationMarkerPath,
+} from "./activation.js";
 
 describe("gateway activation", () => {
-  it("writes provider apiKey and baseUrl into models.providers and switches default model", () => {
+  it("writes precise activated provider/model config and switches default model", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -54,17 +59,36 @@ describe("gateway activation", () => {
     };
     const next = applyActivationConfig({
       cfg,
-      providerId: "openai",
+      providerId: "custom-60-165-239-28-43000",
       providerBaseUrl: "https://mock-llm.example.com/v1",
+      modelId: "qwen3-32b",
       apiKey: "sk-from-activation",
     });
-    expect(next.models?.providers?.openai?.api).toBe("openai-responses");
-    expect(next.models?.providers?.openai?.baseUrl).toBe("https://mock-llm.example.com/v1");
-    expect(next.models?.providers?.openai?.apiKey).toBe("sk-from-activation");
+    expect(next.models?.providers?.["custom-60-165-239-28-43000"]?.api).toBe("openai-completions");
+    expect(next.models?.providers?.["custom-60-165-239-28-43000"]?.baseUrl).toBe(
+      "https://mock-llm.example.com/v1",
+    );
+    expect(next.models?.providers?.["custom-60-165-239-28-43000"]?.apiKey).toBe(
+      "sk-from-activation",
+    );
+    expect(next.models?.providers?.["custom-60-165-239-28-43000"]?.models).toEqual([
+      {
+        id: "qwen3-32b",
+        name: "qwen3-32b",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+    ]);
     expect(next.models?.providers?.anthropic?.apiKey).toBe("keep-me");
     expect(next.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-4o-mini",
+      primary: "custom-60-165-239-28-43000/qwen3-32b",
       fallbacks: ["anthropic/claude-sonnet-4-0"],
+    });
+    expect(next.agents?.defaults?.models?.["custom-60-165-239-28-43000/qwen3-32b"]).toEqual({
+      alias: "newapi",
     });
   });
 
@@ -98,6 +122,7 @@ describe("gateway activation", () => {
     const next = applyActivationConfig({
       cfg,
       providerId: "openai",
+      modelId: "claude-opus-4-6",
       apiKey: "sk-from-activation",
     });
     expect(next.agents?.defaults?.model).toEqual({
@@ -112,5 +137,11 @@ describe("gateway activation", () => {
     await fs.mkdir(path.dirname(markerPath), { recursive: true });
     await fs.writeFile(markerPath, JSON.stringify({ activated: true }), "utf8");
     await expect(isActivated(markerPath)).resolves.toBe(true);
+  });
+
+  it("derives provider id from model api base url", () => {
+    expect(deriveProviderIdFromBaseUrl("http://60.165.239.28:43000/v1")).toBe(
+      "custom-60-165-239-28-43000",
+    );
   });
 });

@@ -15,8 +15,8 @@ RAW_CN_PROFILE_SETTING="${OPENCLAW_CN_PROFILE:-}"
 CN_PROFILE_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
-OPENCLAW_CN_BUNDLED_PLUGIN_ALLOWLIST_DEFAULT="deepseek,qianfan,moonshot,minimax,zai,volcengine,kimi-coding,qqbot,feishu,device-pair,memory-core,memory-lancedb,diffs,thread-ownership,talk-voice,browser"
-OPENCLAW_CN_PLUGIN_ALLOW_JSON='["deepseek","qianfan","moonshot","minimax","zai","volcengine","kimi","qqbot","feishu","device-pair","memory-core","memory-lancedb","diffs","thread-ownership","talk-voice","browser"]'
+OPENCLAW_CN_BUNDLED_PLUGIN_ALLOWLIST_DEFAULT="openrouter,deepseek,qianfan,moonshot,minimax,zai,volcengine,kimi-coding,qqbot,feishu,device-pair,memory-core,memory-lancedb,diffs,thread-ownership,talk-voice,browser"
+OPENCLAW_CN_PLUGIN_ALLOW_JSON='["openrouter","deepseek","qianfan","moonshot","minimax","zai","volcengine","kimi-coding","qqbot","feishu","device-pair","memory-core","memory-lancedb","diffs","thread-ownership","talk-voice","browser"]'
 
 fail() {
   echo "ERROR: $*" >&2

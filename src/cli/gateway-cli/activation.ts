@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import {
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
+  SELF_HOSTED_DEFAULT_MAX_TOKENS,
+} from "../../agents/self-hosted-provider-defaults.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -60,6 +65,7 @@ export function applyActivationConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
   providerBaseUrl?: string;
+  modelId?: string;
   apiKey: string;
 }): OpenClawConfig {
   const providerId = params.providerId.trim();
@@ -77,15 +83,29 @@ export function applyActivationConfig(params: {
     currentPrimaryRaw && currentPrimaryRaw.includes("/")
       ? currentPrimaryRaw.slice(currentPrimaryRaw.indexOf("/") + 1).trim()
       : currentPrimaryRaw.trim();
-  const activatedModelId = firstProviderModel || currentModelId;
+  const explicitModelId = params.modelId?.trim();
+  const activatedModelId = explicitModelId || firstProviderModel || currentModelId;
   const nextPrimaryModelRef = activatedModelId ? `${providerId}/${activatedModelId}` : providerId;
   const nextFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  const preciseModels = activatedModelId
+    ? [
+        {
+          id: activatedModelId,
+          name: activatedModelId,
+          reasoning: false,
+          input: ["text"] as Array<"text" | "image">,
+          cost: SELF_HOSTED_DEFAULT_COST,
+          contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+        },
+      ]
+    : (existingProvider?.models ?? []);
   const nextProvider = {
-    baseUrl: providerBaseUrl || existingProvider?.baseUrl || "https://api.openai.com/v1",
-    models: existingProvider?.models ?? [],
     ...existingProvider,
-    ...(providerBaseUrl ? { baseUrl: providerBaseUrl } : {}),
+    baseUrl: providerBaseUrl || existingProvider?.baseUrl || "https://api.openai.com/v1",
+    api: existingProvider?.api ?? "openai-completions",
     apiKey: params.apiKey,
+    models: preciseModels,
   };
   return {
     ...params.cfg,
@@ -105,9 +125,35 @@ export function applyActivationConfig(params: {
           primary: nextPrimaryModelRef,
           ...(nextFallbacks.length > 0 ? { fallbacks: nextFallbacks } : {}),
         },
+        models: activatedModelId
+          ? {
+              ...params.cfg.agents?.defaults?.models,
+              [nextPrimaryModelRef]: {
+                ...params.cfg.agents?.defaults?.models?.[nextPrimaryModelRef],
+                alias:
+                  params.cfg.agents?.defaults?.models?.[nextPrimaryModelRef]?.alias ?? "newapi",
+              },
+            }
+          : params.cfg.agents?.defaults?.models,
       },
     },
   };
+}
+
+export function deriveProviderIdFromBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return "custom-model-provider";
+  }
+  try {
+    const url = new URL(trimmed);
+    const hostPart = (url.hostname || "custom").replaceAll(/\./g, "-");
+    const portPart = url.port ? `-${url.port}` : "";
+    return `custom-${hostPart}${portPart}`;
+  } catch {
+    const safe = trimmed.replace(/[^\w-]+/g, "-");
+    return `custom-${safe}`.replace(/-+/g, "-");
+  }
 }
 
 function resolveListenHost(
@@ -246,12 +292,14 @@ export async function waitForActivation(params: {
   activationServiceUrl: string;
   providerId: string;
   providerBaseUrl?: string;
+  modelId?: string;
   persistConfig: (next: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<OpenClawConfig> {
   const host = resolveListenHost(params.bind, params.customBindHost);
   const activationServiceUrl = params.activationServiceUrl.trim();
-  const providerId = params.providerId.trim();
+  const providerId =
+    params.providerId.trim() || deriveProviderIdFromBaseUrl(params.providerBaseUrl ?? "");
   let nextConfig = params.cfg;
   const server = createServer((req, res) => {
     void (async () => {
@@ -307,6 +355,7 @@ export async function waitForActivation(params: {
           cfg: nextConfig,
           providerId,
           providerBaseUrl: params.providerBaseUrl,
+          modelId: params.modelId,
           apiKey: activationResponse.data.apiKey,
         });
         await params.persistConfig(nextConfig);

@@ -27,7 +27,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
-import { isActivated, resolveActivationMarkerPath, waitForActivation } from "./activation.js";
+import {
+  deriveProviderIdFromBaseUrl,
+  isActivated,
+  resolveActivationMarkerPath,
+  waitForActivation,
+} from "./activation.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -89,7 +94,8 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const DEFAULT_ACTIVATION_SERVICE_URL = "http://127.0.0.1:18080/mock/activation";
-const DEFAULT_ACTIVATION_PROVIDER = "openai";
+const DEFAULT_ACTIVATION_MODEL_API_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_ACTIVATION_MODEL_ID = "gpt-4o-mini";
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
@@ -257,6 +263,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const activationMarkerPath = resolveActivationMarkerPath(resolveStateDir(process.env));
   const activated = await isActivated(activationMarkerPath);
   if (!activated) {
+    const activationModelApiBaseUrl =
+      process.env.OPENCLAW_ACTIVATION_MODEL_API_BASE_URL?.trim() ||
+      process.env.OPENCLAW_ACTIVATION_MODEL_BASE_URL?.trim() ||
+      DEFAULT_ACTIVATION_MODEL_API_BASE_URL;
+    const activationModelId =
+      process.env.OPENCLAW_ACTIVATION_MODEL_ID?.trim() ||
+      process.env.OPENCLAW_ACTIVATION_PROVIDER_ID?.trim() ||
+      DEFAULT_ACTIVATION_MODEL_ID;
     cfg = await waitForActivation({
       markerPath: activationMarkerPath,
       cfg,
@@ -266,8 +280,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       activationServiceUrl:
         process.env.OPENCLAW_ACTIVATION_SERVICE_URL?.trim() || DEFAULT_ACTIVATION_SERVICE_URL,
       providerId:
-        process.env.OPENCLAW_ACTIVATION_PROVIDER_ID?.trim() || DEFAULT_ACTIVATION_PROVIDER,
-      providerBaseUrl: process.env.OPENCLAW_ACTIVATION_MODEL_BASE_URL?.trim() || undefined,
+        process.env.OPENCLAW_ACTIVATION_MODEL_PROVIDER_NAME?.trim() ||
+        deriveProviderIdFromBaseUrl(activationModelApiBaseUrl),
+      providerBaseUrl: activationModelApiBaseUrl,
+      modelId: activationModelId,
       persistConfig: async (next) => await writeConfigFile(next),
       log: {
         info: (msg) => gatewayLog.info(msg),

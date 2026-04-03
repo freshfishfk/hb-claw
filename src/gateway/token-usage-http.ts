@@ -54,7 +54,10 @@ function resolveUsageUrlFromActivationBase(rawBase: string): string {
 
 function resolveActivatedProviderApiKey(): { providerId: string; apiKey: string } | null {
   const cfg = loadConfig();
-  const explicitProvider = (process.env.OPENCLAW_ACTIVATION_PROVIDER_ID ?? "").trim();
+  const explicitProvider = (
+    process.env.OPENCLAW_ACTIVATION_MODEL_PROVIDER_NAME ??
+    process.env.OPENCLAW_ACTIVATION_PROVIDER_ID
+  )?.trim();
   if (explicitProvider) {
     const apiKey = cfg.models?.providers?.[explicitProvider]?.apiKey;
     if (typeof apiKey === "string" && apiKey.trim()) {
