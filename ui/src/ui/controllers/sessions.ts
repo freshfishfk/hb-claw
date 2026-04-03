@@ -18,6 +18,14 @@ export type SessionsState = {
   sessionsIncludeUnknown: boolean;
 };
 
+export type CreateChatSessionParams = {
+  agentId?: string;
+  label?: string;
+  task?: string;
+  message?: string;
+  parentSessionKey?: string;
+};
+
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
     return;
@@ -75,6 +83,62 @@ export async function loadSessions(
   } finally {
     state.sessionsLoading = false;
   }
+}
+
+export async function queryChatSessions(state: SessionsState): Promise<SessionsListResult | null> {
+  await loadSessions(state, {
+    activeMinutes: 0,
+    limit: 0,
+    includeGlobal: true,
+    includeUnknown: true,
+  });
+  return state.sessionsResult;
+}
+
+export async function createChatSession(
+  state: SessionsState,
+  params: CreateChatSessionParams = {},
+): Promise<string | null> {
+  if (!state.client || !state.connected || state.sessionsLoading) {
+    return null;
+  }
+  state.sessionsLoading = true;
+  state.sessionsError = null;
+  let createdKey: string | null = null;
+  try {
+    const payload: Record<string, unknown> = {};
+    if (typeof params.agentId === "string" && params.agentId.trim()) {
+      payload.agentId = params.agentId.trim();
+    }
+    if (typeof params.label === "string" && params.label.trim()) {
+      payload.label = params.label.trim();
+    }
+    if (typeof params.task === "string" && params.task.trim()) {
+      payload.task = params.task.trim();
+    }
+    if (typeof params.message === "string" && params.message.trim()) {
+      payload.message = params.message.trim();
+    }
+    if (typeof params.parentSessionKey === "string" && params.parentSessionKey.trim()) {
+      payload.parentSessionKey = params.parentSessionKey.trim();
+    }
+    const created = await state.client.request<{ key?: unknown }>("sessions.create", payload);
+    const key = typeof created?.key === "string" ? created.key.trim() : "";
+    createdKey = key || null;
+  } catch (err) {
+    state.sessionsError = String(err);
+  } finally {
+    state.sessionsLoading = false;
+  }
+  if (createdKey) {
+    await queryChatSessions(state);
+  }
+  return createdKey;
+}
+
+export async function deleteChatSession(state: SessionsState, key: string): Promise<boolean> {
+  const deleted = await deleteSessionsAndRefresh(state, [key]);
+  return deleted.includes(key);
 }
 
 export async function patchSession(

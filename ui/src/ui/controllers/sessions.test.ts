@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSessionsAndRefresh, subscribeSessions, type SessionsState } from "./sessions.ts";
+import {
+  createChatSession,
+  deleteChatSession,
+  deleteSessionsAndRefresh,
+  queryChatSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -39,6 +46,75 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("queryChatSessions", () => {
+  it("loads all chat sessions for history panel", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return { sessions: [{ key: "a" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+
+    const result = await queryChatSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(result).toEqual({ sessions: [{ key: "a" }] });
+  });
+});
+
+describe("createChatSession", () => {
+  it("creates a session and refreshes the list", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.create") {
+        expect(params).toEqual({ agentId: "main" });
+        return { key: "agent:main:dashboard:new-key" };
+      }
+      if (method === "sessions.list") {
+        return { sessions: [{ key: "agent:main:dashboard:new-key" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+
+    const key = await createChatSession(state, { agentId: "main" });
+
+    expect(key).toBe("agent:main:dashboard:new-key");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+  });
+});
+
+describe("deleteChatSession", () => {
+  it("delegates to deleteSessionsAndRefresh and returns boolean", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return undefined;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const deleted = await deleteChatSession(state, "key-a");
+
+    expect(deleted).toBe(true);
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key: "key-a",
+      deleteTranscript: true,
+    });
   });
 });
 

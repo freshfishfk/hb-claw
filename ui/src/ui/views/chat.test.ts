@@ -205,6 +205,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     disabledReason: null,
     error: null,
     sessions: createSessions(),
+    sessionsLoading: false,
     focusMode: false,
     assistantName: "OpenClaw",
     assistantAvatar: null,
@@ -217,6 +218,8 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
+    onSessionDelete: () => undefined,
+    onSessionsRefresh: () => undefined,
     ...overrides,
   };
 }
@@ -274,6 +277,60 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("renders session history and wires create/select/delete actions", () => {
+    const container = document.createElement("div");
+    const onSessionSelect = vi.fn();
+    const onSessionDelete = vi.fn();
+    const onNewSession = vi.fn();
+    const onSessionsRefresh = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:main:dashboard:active",
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 2,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:active",
+                kind: "direct",
+                updatedAt: 2_000,
+                label: "Current chat",
+              },
+              {
+                key: "agent:main:dashboard:older",
+                kind: "direct",
+                updatedAt: 1_000,
+                label: "Older chat",
+              },
+            ],
+          },
+          onSessionSelect,
+          onSessionDelete,
+          onNewSession,
+          onSessionsRefresh,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Current chat");
+    expect(container.textContent).toContain("Older chat");
+    const historyItems = container.querySelectorAll<HTMLButtonElement>(".chat-history__item");
+    historyItems[1]?.click();
+    expect(onSessionSelect).toHaveBeenCalledWith("agent:main:dashboard:older");
+    const deleteBtn = container.querySelector<HTMLButtonElement>(".chat-history__delete");
+    deleteBtn?.click();
+    expect(onSessionDelete).toHaveBeenCalledWith("agent:main:dashboard:older");
+    const historyHeader = container.querySelector(".chat-history__header");
+    historyHeader?.querySelector<HTMLButtonElement>('button[aria-label="New chat"]')?.click();
+    historyHeader?.querySelector<HTMLButtonElement>('button[aria-label="Refresh chats"]')?.click();
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(onSessionsRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(

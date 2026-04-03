@@ -75,6 +75,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  sessionsLoading?: boolean;
   focusMode: boolean;
   sidebarOpen?: boolean;
   sidebarContent?: string | null;
@@ -104,6 +105,8 @@ export type ChatProps = {
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
+  onSessionDelete?: (sessionKey: string) => void;
+  onSessionsRefresh?: () => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -354,6 +357,31 @@ function formatTokensCompact(n: number): string {
     return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   return String(n);
+}
+
+function formatSessionTimestamp(ts: number | null | undefined): string {
+  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
+    return "No activity";
+  }
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(ts));
+  } catch {
+    return "No activity";
+  }
+}
+
+function resolveSessionTitle(row: GatewaySessionRow): string {
+  const label =
+    (typeof row.displayName === "string" && row.displayName.trim()) ||
+    (typeof row.label === "string" && row.label.trim()) ||
+    (typeof row.subject === "string" && row.subject.trim()) ||
+    row.key;
+  return label || row.key;
 }
 
 function generateAttachmentId(): string {
@@ -934,6 +962,9 @@ export function renderChat(props: ChatProps) {
 
   const chatItems = buildChatItems(props);
   const isEmpty = chatItems.length === 0 && !props.loading;
+  const sessionRows = Array.isArray(props.sessions?.sessions)
+    ? [...props.sessions.sessions].toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    : [];
 
   const thread = html`
     <div
@@ -1180,6 +1211,73 @@ export function renderChat(props: ChatProps) {
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+        <aside class="chat-history" aria-label="Chat sessions">
+          <div class="chat-history__header">
+            <div class="chat-history__title">Chats</div>
+            <div class="chat-history__actions">
+              <button
+                class="btn btn--ghost btn--sm"
+                type="button"
+                @click=${props.onSessionsRefresh}
+                title="Refresh chats"
+                aria-label="Refresh chats"
+                ?disabled=${!props.connected || props.sessionsLoading}
+              >
+                ${icons.refresh}
+              </button>
+              <button
+                class="btn btn--ghost btn--sm"
+                type="button"
+                @click=${props.onNewSession}
+                title="New chat"
+                aria-label="New chat"
+                ?disabled=${!props.connected || props.sessionsLoading}
+              >
+                ${icons.plus}
+              </button>
+            </div>
+          </div>
+          <div class="chat-history__list">
+            ${sessionRows.length === 0
+              ? html`<div class="chat-history__empty">No chat history yet.</div>`
+              : repeat(
+                  sessionRows,
+                  (row) => row.key,
+                  (row) => {
+                    const title = resolveSessionTitle(row);
+                    const isActive = row.key === props.sessionKey;
+                    return html`
+                      <div class="chat-history__row ${isActive ? "is-active" : ""}">
+                        <button
+                          class="chat-history__item"
+                          type="button"
+                          @click=${() => props.onSessionSelect?.(row.key)}
+                          title=${title}
+                        >
+                          <span class="chat-history__item-title">${title}</span>
+                          <span class="chat-history__item-meta"
+                            >${formatSessionTimestamp(row.updatedAt)}</span
+                          >
+                        </button>
+                        ${row.key !== props.sessionKey && props.onSessionDelete
+                          ? html`
+                              <button
+                                class="chat-history__delete"
+                                type="button"
+                                @click=${() => props.onSessionDelete?.(row.key)}
+                                title="Delete chat"
+                                aria-label="Delete chat"
+                              >
+                                ${icons.trash}
+                              </button>
+                            `
+                          : nothing}
+                      </div>
+                    `;
+                  },
+                )}
+          </div>
+        </aside>
         <div
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"

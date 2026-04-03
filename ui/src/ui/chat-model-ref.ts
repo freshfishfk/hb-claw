@@ -129,21 +129,14 @@ export function resolvePreferredServerChatModelValue(
 }
 
 export function formatChatModelDisplay(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const separator = trimmed.indexOf("/");
-  if (separator <= 0) {
-    return trimmed;
-  }
-  return `${trimmed.slice(separator + 1)} · ${trimmed.slice(0, separator)}`;
+  return value.trim();
 }
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
+  const qualified = buildQualifiedChatModelValue(entry.id, provider);
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
-    label: provider ? `${entry.id} · ${provider}` : entry.id,
+    value: qualified,
+    label: qualified || entry.id,
   };
 }

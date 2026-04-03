@@ -78,7 +78,14 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import {
+  createChatSession,
+  deleteChatSession,
+  deleteSessionsAndRefresh,
+  loadSessions,
+  patchSession,
+  queryChatSessions,
+} from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -1470,7 +1477,17 @@ export function renderApp(state: AppViewState) {
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
-              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              onNewSession: async () => {
+                const activeAgentId =
+                  resolveAgentIdFromSessionKey(state.sessionKey) ?? resolvedAgentId;
+                const created = await createChatSession(
+                  state,
+                  activeAgentId ? { agentId: activeAgentId } : {},
+                );
+                if (created) {
+                  switchChatSession(state, created);
+                }
+              },
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;
@@ -1507,6 +1524,17 @@ export function renderApp(state: AppViewState) {
               onSessionSelect: (key: string) => {
                 switchChatSession(state, key);
               },
+              onSessionDelete: async (key: string) => {
+                const deleted = await deleteChatSession(state, key);
+                if (deleted && state.sessionKey === key) {
+                  const fallback =
+                    state.sessionsResult?.sessions.find((row) => row.key !== key)?.key ??
+                    buildAgentMainSessionKey({ agentId: resolvedAgentId ?? "main" });
+                  switchChatSession(state, fallback);
+                }
+              },
+              onSessionsRefresh: () => queryChatSessions(state),
+              sessionsLoading: state.sessionsLoading,
               showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
               onScrollToBottom: () => state.scrollToBottom(),
               // Sidebar props for tool output viewing
