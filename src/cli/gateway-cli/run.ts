@@ -29,6 +29,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
 import {
   deriveProviderIdFromBaseUrl,
+  expandActivationProviderAllowlist,
   isActivated,
   resolveActivationMarkerPath,
   waitForActivation,
@@ -236,6 +237,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   let cfg = loadConfig();
+  const expandedAllowlist = expandActivationProviderAllowlist({ cfg });
+  if (expandedAllowlist.changed) {
+    cfg = expandedAllowlist.cfg;
+    await writeConfigFile(cfg);
+    gatewayLog.info("expanded activation provider model allowlist for chat model selection");
+  }
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");

@@ -47,6 +47,13 @@ type ActivationServiceFailure = {
 
 type ActivationServiceResponse = ActivationServiceSuccess | ActivationServiceFailure;
 
+type ProviderModelsResponse = {
+  success?: boolean;
+  data?: Array<{
+    id?: unknown;
+  }>;
+};
+
 export function resolveActivationMarkerPath(stateDir: string): string {
   return path.join(stateDir, "system", ACTIVATION_MARKER_FILE);
 }
@@ -66,6 +73,7 @@ export function applyActivationConfig(params: {
   providerId: string;
   providerBaseUrl?: string;
   modelId?: string;
+  availableModelIds?: string[];
   apiKey: string;
 }): OpenClawConfig {
   const providerId = params.providerId.trim();
@@ -84,22 +92,39 @@ export function applyActivationConfig(params: {
       ? currentPrimaryRaw.slice(currentPrimaryRaw.indexOf("/") + 1).trim()
       : currentPrimaryRaw.trim();
   const explicitModelId = params.modelId?.trim();
-  const activatedModelId = explicitModelId || firstProviderModel || currentModelId;
+  const discoveredModelIds = (params.availableModelIds ?? [])
+    .filter((id) => typeof id === "string")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  const existingModelIds = (existingProvider?.models ?? [])
+    .map((model) => (typeof model?.id === "string" ? model.id.trim() : ""))
+    .filter((id) => id.length > 0);
+  const fallbackModelId = firstProviderModel || currentModelId;
+  const mergedModelIds = Array.from(
+    new Set([
+      ...(explicitModelId ? [explicitModelId] : []),
+      ...discoveredModelIds,
+      ...existingModelIds,
+      ...(discoveredModelIds.length === 0 && existingModelIds.length === 0 && fallbackModelId
+        ? [fallbackModelId]
+        : []),
+    ]),
+  );
+  const activatedModelId = explicitModelId || mergedModelIds[0] || "";
   const nextPrimaryModelRef = activatedModelId ? `${providerId}/${activatedModelId}` : providerId;
   const nextFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  const preciseModels = activatedModelId
-    ? [
-        {
-          id: activatedModelId,
-          name: activatedModelId,
+  const preciseModels =
+    mergedModelIds.length > 0
+      ? mergedModelIds.map((id) => ({
+          id,
+          name: id,
           reasoning: false,
           input: ["text"] as Array<"text" | "image">,
           cost: SELF_HOSTED_DEFAULT_COST,
           contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
           maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
-        },
-      ]
-    : (existingProvider?.models ?? []);
+        }))
+      : (existingProvider?.models ?? []);
   const nextProvider = {
     ...existingProvider,
     baseUrl: providerBaseUrl || existingProvider?.baseUrl || "https://api.openai.com/v1",
@@ -128,15 +153,81 @@ export function applyActivationConfig(params: {
         models: activatedModelId
           ? {
               ...params.cfg.agents?.defaults?.models,
-              [nextPrimaryModelRef]: {
-                ...params.cfg.agents?.defaults?.models?.[nextPrimaryModelRef],
-                alias:
-                  params.cfg.agents?.defaults?.models?.[nextPrimaryModelRef]?.alias ?? "newapi",
-              },
+              ...Object.fromEntries(
+                mergedModelIds.map((modelId) => {
+                  const key = `${providerId}/${modelId}`;
+                  const existing = params.cfg.agents?.defaults?.models?.[key] ?? {};
+                  if (key === nextPrimaryModelRef) {
+                    return [
+                      key,
+                      {
+                        ...existing,
+                        alias:
+                          params.cfg.agents?.defaults?.models?.[nextPrimaryModelRef]?.alias ??
+                          "newapi",
+                      },
+                    ];
+                  }
+                  return [key, existing];
+                }),
+              ),
             }
           : params.cfg.agents?.defaults?.models,
       },
     },
+  };
+}
+
+export function expandActivationProviderAllowlist(params: { cfg: OpenClawConfig }): {
+  cfg: OpenClawConfig;
+  changed: boolean;
+} {
+  const defaultsModels = params.cfg.agents?.defaults?.models ?? {};
+  const defaultsModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
+  if (!defaultsModel.includes("/")) {
+    return { cfg: params.cfg, changed: false };
+  }
+  const providerId = defaultsModel.slice(0, defaultsModel.indexOf("/")).trim();
+  const primaryKey = defaultsModel.trim();
+  if (!providerId || !primaryKey) {
+    return { cfg: params.cfg, changed: false };
+  }
+  const primaryEntry = defaultsModels[primaryKey];
+  if (primaryEntry?.alias !== "newapi") {
+    return { cfg: params.cfg, changed: false };
+  }
+  const providerModelIds = (params.cfg.models?.providers?.[providerId]?.models ?? [])
+    .map((model) => (typeof model?.id === "string" ? model.id.trim() : ""))
+    .filter((id) => id.length > 0);
+  if (providerModelIds.length <= 1) {
+    return { cfg: params.cfg, changed: false };
+  }
+  const nextDefaultsModels: Record<string, { alias?: string; params?: Record<string, unknown> }> = {
+    ...defaultsModels,
+  };
+  let changed = false;
+  for (const modelId of providerModelIds) {
+    const key = `${providerId}/${modelId}`;
+    if (!(key in nextDefaultsModels)) {
+      nextDefaultsModels[key] = {};
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return { cfg: params.cfg, changed: false };
+  }
+  return {
+    cfg: {
+      ...params.cfg,
+      agents: {
+        ...params.cfg.agents,
+        defaults: {
+          ...params.cfg.agents?.defaults,
+          models: nextDefaultsModels,
+        },
+      },
+    },
+    changed: true,
   };
 }
 
@@ -239,6 +330,58 @@ function isActivationServiceResponse(input: unknown): input is ActivationService
     );
   }
   return true;
+}
+
+function resolveProviderModelsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return "https://api.openai.com/v1/models";
+  }
+  try {
+    const url = new URL(trimmed);
+    const pathname = url.pathname.replace(/\/+$/g, "");
+    if (pathname.endsWith("/v1/models")) {
+      return `${url.origin}${pathname}`;
+    }
+    if (pathname.endsWith("/v1")) {
+      return `${url.origin}${pathname}/models`;
+    }
+    return `${url.origin}/v1/models`;
+  } catch {
+    return trimmed;
+  }
+}
+
+async function requestProviderModelIds(params: {
+  providerBaseUrl?: string;
+  apiKey: string;
+}): Promise<string[]> {
+  const url = resolveProviderModelsUrl(params.providerBaseUrl ?? "https://api.openai.com/v1");
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    signal: AbortSignal.timeout(ACTIVATION_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`模型列表请求失败: HTTP ${response.status}`);
+  }
+  const parsed = (await response.json()) as ProviderModelsResponse;
+  const okFlag = parsed?.success;
+  if (okFlag === false) {
+    throw new Error("模型服务返回失败");
+  }
+  if (!parsed || !Array.isArray(parsed.data)) {
+    throw new Error("模型服务返回格式无效");
+  }
+  return Array.from(
+    new Set(
+      parsed.data
+        .map((item) => (typeof item?.id === "string" ? item.id.trim() : ""))
+        .filter((id) => id.length > 0),
+    ),
+  );
 }
 
 async function requestActivationService(params: {
@@ -351,11 +494,21 @@ export async function waitForActivation(params: {
         return;
       }
       try {
+        let providerModelIds: string[] = [];
+        try {
+          providerModelIds = await requestProviderModelIds({
+            providerBaseUrl: params.providerBaseUrl,
+            apiKey: activationResponse.data.apiKey,
+          });
+        } catch (err) {
+          params.log.warn(`load provider models failed: ${String(err)}`);
+        }
         nextConfig = applyActivationConfig({
           cfg: nextConfig,
           providerId,
           providerBaseUrl: params.providerBaseUrl,
           modelId: params.modelId,
+          availableModelIds: providerModelIds,
           apiKey: activationResponse.data.apiKey,
         });
         await params.persistConfig(nextConfig);
