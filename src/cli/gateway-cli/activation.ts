@@ -180,7 +180,7 @@ function validateActivationPayload(input: unknown): ActivationPayload | null {
   const adminName = typeof obj.adminName === "string" ? obj.adminName.trim() : "";
   const phone = typeof obj.phone === "string" ? obj.phone.trim() : "";
   const activationCode = typeof obj.activationCode === "string" ? obj.activationCode.trim() : "";
-  if (!companyName || !businessLicense || !adminName || !phone || !activationCode) {
+  if (!companyName || !adminName || !phone || !activationCode) {
     return null;
   }
   return { companyName, businessLicense, adminName, phone, activationCode };
